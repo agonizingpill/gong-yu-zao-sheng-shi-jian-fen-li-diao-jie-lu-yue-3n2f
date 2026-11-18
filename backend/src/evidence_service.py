@@ -4,6 +4,7 @@ from sqlalchemy import select
 from fastapi import HTTPException
 from .models import NoiseEvent,Separation,Attribution,Agreement,Remedy,Breach
 from .common import require,lock_case,record,now,dump,within_window
+from . import calibration_service as calibration
 queue=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'),decode_responses=True,socket_connect_timeout=2,socket_timeout=2)
 def create_event(db,user,caseid,data):
     case=lock_case(db,caseid)
@@ -11,7 +12,9 @@ def create_event(db,user,caseid,data):
     require(case.status!='closed','已结案，请主管先重开')
     require(data.measured_at<=now(db),'监测时间不可晚于演示时钟')
     require(not db.scalar(select(NoiseEvent).where(NoiseEvent.complaint_id==caseid,NoiseEvent.measured_at==data.measured_at,NoiseEvent.position==data.position)),'同地点同一时刻已登记事件，禁止重复计数')
-    row=NoiseEvent(complaint_id=caseid,**data.model_dump(),total=sum(data.energies));db.add(row);db.flush()
+    # 判读按该楼栋/测点当前生效模板；未通过校准的测点沿用原模板。
+    snapshot=calibration.classify_for_point(db,case.building,data.position,data.energies)
+    row=NoiseEvent(complaint_id=caseid,**data.model_dump(),total=sum(data.energies),**snapshot);db.add(row);db.flush()
     agreements=db.scalars(select(Agreement).where(Agreement.complaint_id==caseid,Agreement.state.in_(['active','observing','breached']))).all()
     for a in agreements:
         # 复发必须在整改交付之后且处于约定的静音时段。
@@ -20,7 +23,7 @@ def create_event(db,user,caseid,data):
         if completions and data.measured_at>max(completions) and within_window(data.measured_at,a) and row.total>a.threshold:
             db.add(Breach(agreement_id=a.id,event_id=row.id));a.state='breached';case.status='remedy';a.observation_from=None;a.observation_until=None
             for r in remedies:r.state='reopened'
-    record(db,user,'event.record',row.id,f'complaint={caseid};total={row.total}');db.commit();return dump(row)
+    record(db,user,'event.record',row.id,f'complaint={caseid};total={row.total}');db.commit();return row
 def start_separation(db,user,caseid):
     case=lock_case(db,caseid);require(case.consent,'撤回监测授权后不能新增算法处理');require(case.status!='closed','已结案不能重新处理')
     events=db.scalars(select(NoiseEvent).where(NoiseEvent.complaint_id==caseid).order_by(NoiseEvent.id)).all()

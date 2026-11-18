@@ -42,6 +42,67 @@ class NoiseEvent(Base):
     energies:Mapped[list]=mapped_column(JSON)
     total:Mapped[float]=mapped_column(Float)
     note:Mapped[str]=mapped_column(String(300),default='合成频带，无原始录音')
+    # 判读该条事件时所用的测点模板快照；模板之后更换也不改写历史记录。
+    template_origin:Mapped[str]=mapped_column(String(20),default='default')
+    template_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
+    template_revision:Mapped[int]=mapped_column(Integer,default=0)
+    predicted_source:Mapped[str]=mapped_column(String(20),default='undetermined')
+    predicted_score:Mapped[float]=mapped_column(Float,default=0.0)
+
+class MeasurementPoint(Base):
+    """一个物理测点的模板指针与并发锁根；未校准的测点指针为空，沿用原模板。"""
+    __tablename__='measurement_points'
+    __table_args__=(UniqueConstraint('building','position',name='one_point'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    building:Mapped[str]=mapped_column(String(40))
+    position:Mapped[str]=mapped_column(String(60))
+    active_template_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
+    revision:Mapped[int]=mapped_column(Integer,default=0)
+
+class CalibrationBatch(Base):
+    """同一次采集的整批样本；整批只作训练或只作留出，不拆分。"""
+    __tablename__='calibration_batches'
+    __table_args__=(UniqueConstraint('building','position','captured_at',name='one_capture'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    building:Mapped[str]=mapped_column(String(40))
+    position:Mapped[str]=mapped_column(String(60))
+    captured_at:Mapped[datetime]=mapped_column(DateTime)
+    role:Mapped[str]=mapped_column(String(10))
+    note:Mapped[str]=mapped_column(String(300),default='')
+    created_by:Mapped[str]=mapped_column(String(60))
+    created_at:Mapped[datetime]=mapped_column(default=datetime.utcnow)
+
+class CalibrationSample(Base):
+    __tablename__='calibration_samples'
+    id:Mapped[int]=mapped_column(primary_key=True)
+    batch_id:Mapped[int]=mapped_column(ForeignKey('calibration_batches.id'))
+    source:Mapped[str]=mapped_column(String(20))
+    energies:Mapped[list]=mapped_column(JSON)
+    corrected_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    correction_reason:Mapped[str]=mapped_column(String(300),default='')
+
+class TemplateCandidate(Base):
+    __tablename__='template_candidates'
+    id:Mapped[int]=mapped_column(primary_key=True)
+    building:Mapped[str]=mapped_column(String(40))
+    position:Mapped[str]=mapped_column(String(60))
+    state:Mapped[str]=mapped_column(String(20),default='evaluated')
+    revision:Mapped[int]=mapped_column(Integer,default=1)
+    templates:Mapped[dict]=mapped_column(JSON)
+    train_batch_ids:Mapped[list]=mapped_column(JSON)
+    holdout_batch_ids:Mapped[list]=mapped_column(JSON)
+    train_accuracy:Mapped[float]=mapped_column(Float,default=0.0)
+    holdout_accuracy:Mapped[float]=mapped_column(Float,default=0.0)
+    baseline_kind:Mapped[str]=mapped_column(String(20),default='default')
+    baseline_candidate_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
+    baseline_accuracy:Mapped[float]=mapped_column(Float,default=0.0)
+    baseline_revision:Mapped[int]=mapped_column(Integer,default=0)
+    holdout_checksum:Mapped[str]=mapped_column(String(64),default='')
+    invalidated_reason:Mapped[str]=mapped_column(String(300),default='')
+    created_by:Mapped[str]=mapped_column(String(60))
+    created_at:Mapped[datetime]=mapped_column(default=datetime.utcnow)
+    activated_at:Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+
 class Separation(Base):
     __tablename__='separations'
     id:Mapped[int]=mapped_column(primary_key=True)
